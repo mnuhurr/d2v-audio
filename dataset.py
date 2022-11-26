@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Union
 
 
-class RawAudioDataset(torch.nn.Module):
+class RawAudioDataset(torch.utils.data.Dataset):
     def __init__(self, filenames: List[Union[str, Path]], sample_rate: int = 16000, max_duration: float = 10.0):
         super().__init__()
 
