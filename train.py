@@ -33,7 +33,18 @@ def main(config_fn='settings.yaml'):
     max_duration = cfg.get('max_duration', 10.0)
     sample_rate = cfg.get('sample_rate', 16000)
 
-    #logger.info(f'got {len(train_files)} for training, {len(val_files)} for validation')
+    train_files = []
+    val_files = []
+
+    for train_dir in cfg.get('train_data_dirs', []):
+        train_files.extend(get_dir_filenames(train_dir, min_duration=min_duration))
+
+    for val_dir in cfg.get('val_data_dirs', []):
+        val_files.extend(get_dir_filenames(val_dir, min_duration=min_duration))
+
+    logger.info(f'got {len(train_files)} for training, {len(val_files)} for validation')
+
+
 
 if __name__ == '__main__':
     main()
