@@ -188,7 +188,7 @@ def main(config_fn='settings.yaml'):
     n_fft = cfg.get('n_fft', 1024)
     hop_length = cfg.get('hop_length')
     n_mels = cfg.get('n_mels', 64)
-    max_length = 288
+    max_length = 250
 
     #ds_train = RawAudioDataset(train_files, sample_rate=sample_rate, max_duration=max_duration)
     #ds_val = RawAudioDataset(val_files, sample_rate=sample_rate, max_duration=max_duration)
