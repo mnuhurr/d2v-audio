@@ -51,6 +51,17 @@ def avg_var(x: torch.Tensor):
     return torch.mean(vars)
 
 
+def loss_fn(y_student: List[torch.Tensor], y_teacher: List[torch.Tensor], mask: torch.Tensor, n_layers: int = 8, lambda_var: float = 1.0):
+    avg_student = torch.mean(torch.stack(y_student[-n_layers:]), dim=0)
+    avg_teacher = torch.mean(torch.stack(y_teacher[-n_layers:]), dim=0)
+
+    var_loss = F.relu(1 - avg_var(y_teacher[-1]))
+
+    loss = mask_loss(avg_student, avg_teacher, mask) + lambda_var * var_loss
+
+    return loss
+
+
 def train(model: torch.nn.Module,
           target: torch.nn.Module,
           loader: torch.utils.data.DataLoader,
@@ -58,7 +69,8 @@ def train(model: torch.nn.Module,
           scheduler: Optional[Any] = None,
           log_interval: Optional[int] = 100,
           n_layers: int = 8,
-          ema_decay: float = 0.999):
+          ema_decay: float = 0.999,
+          lambda_var: float = 1.0):
 
     model.train()
     target.train()
@@ -74,11 +86,15 @@ def train(model: torch.nn.Module,
         y_teacher, _ = target(x, masking=False)
 
         # take the n_layers last layers for comparison
-        losses = []
-        for u, v in zip(y_student[-n_layers:], y_teacher[-n_layers:]):
-            losses.append(mask_loss(u, v, mask))
+        #losses = []
+        #for u, v in zip(y_student[-n_layers:], y_teacher[-n_layers:]):
+        #    losses.append(mask_loss(u, v, mask))
+        #loss = sum(losses)
 
-        loss = sum(losses)
+        # normalize teacher
+        y_teacher = [F.normalize(block, dim=-1) for block in y_teacher]
+
+        loss = loss_fn(y_student, y_teacher, mask, n_layers=n_layers, lambda_var=lambda_var)
         train_loss += loss.item()
 
         optimizer.zero_grad()
@@ -103,7 +119,8 @@ def train(model: torch.nn.Module,
 def validate(model: torch.nn.Module,
              target: torch.nn.Module,
              loader: torch.utils.data.DataLoader,
-             n_layers: int = 8):
+             n_layers: int = 8,
+             lambda_var: float = 1.0):
 
     model.eval()
     target.eval()
@@ -118,11 +135,16 @@ def validate(model: torch.nn.Module,
         y_teacher, _ = target(x, masking=False)
 
         # take the n_layers last layers for comparison
-        losses = []
-        for u, v in zip(y_student[-n_layers:], y_teacher[-n_layers:]):
-            losses.append(mask_loss(u, v, mask))
+        #losses = []
+        #for u, v in zip(y_student[-n_layers:], y_teacher[-n_layers:]):
+        #    losses.append(mask_loss(u, v, mask))
+        #loss = sum(losses)
+        
+        # normalize teacher
+        y_teacher = [F.normalize(block, dim=-1) for block in y_teacher]
 
-        loss = sum(losses)
+        loss = loss_fn(y_student, y_teacher, mask, n_layers=n_layers, lambda_var=lambda_var)
+
         val_loss += loss.item()
         val_vars += avg_var(y_teacher[-1])
 
