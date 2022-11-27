@@ -58,16 +58,32 @@ class WaveEncoder(torch.nn.Module):
         return self.layers(x.unsqueeze(1))
 
 
+class MelEncoder(torch.nn.Module):
+    def __init__(self, n_mels, d_model: int = 128):
+        super().__init__()
+
+        self.layers = torch.nn.Sequential(
+            NormalizedCausalConvBlock(n_mels, d_model, kernel_size=7, stride=4),
+            NormalizedCausalConvBlock(d_model, d_model, kernel_size=3, stride=2),
+            NormalizedCausalConvBlock(d_model, d_model, kernel_size=3, stride=2),
+        )
+
+    def forward(self, x):
+        return self.layers(x)
+
 def foo():
     from utils import model_size
 
-    x = torch.randn(2, 10*16000)
-    wenc = WaveEncoder(256)
+    #x = torch.randn(2, 10*16000)
+    #wenc = WaveEncoder(256)
 
-    y = wenc(x)
+    x = torch.randn(2, 64, 720)
+    menc = MelEncoder(64, 256)
+
+    y = menc(x)
     print(y.shape)
 
-    print(model_size(wenc))
+    print(model_size(menc))
 
 
 if __name__ == '__main__':

@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 
 from .encoders import WaveEncoder
+from .encoders import MelEncoder
 from .transformer import TransformerEncoder
 
 from typing import Tuple, Optional
@@ -13,13 +14,15 @@ class D2VEncoder(torch.nn.Module):
                  n_layers: int,
                  d_ff: int,
                  n_heads: int,
+                 n_mels: int,
                  max_sequence_length: int,
                  p_masking: float = 0.065,
                  masking_length: int = 10):
 
         super().__init__()
 
-        self.encoder = WaveEncoder(d_model)
+        #self.encoder = WaveEncoder(d_model)
+        self.encoder = MelEncoder(n_mels, d_model)
         self.transformer = TransformerEncoder(
             d_model=d_model,
             n_layers=n_layers,
@@ -34,7 +37,6 @@ class D2VEncoder(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, masking: bool = False) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         x = self.encoder(x)
-
         x = x.permute(0, 2, 1)
 
         mask = None

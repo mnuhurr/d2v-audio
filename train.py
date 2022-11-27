@@ -12,6 +12,7 @@ import audiofile as af
 
 from common import init_log, read_yaml
 from dataset import RawAudioDataset
+from dataset import MelDataset
 from models import D2VEncoder
 from models.utils import model_size, ema_update
 
@@ -83,7 +84,8 @@ def train(model: torch.nn.Module,
         x = x.to(device)
 
         y_student, mask = model(x, masking=True)
-        y_teacher, _ = target(x, masking=False)
+        with torch.no_grad():
+            y_teacher, _ = target(x, masking=False)
 
         # take the n_layers last layers for comparison
         #losses = []
@@ -92,7 +94,8 @@ def train(model: torch.nn.Module,
         #loss = sum(losses)
 
         # normalize teacher
-        y_teacher = [F.normalize(block, dim=-1) for block in y_teacher]
+        #y_teacher = [F.normalize(block, dim=-1) for block in y_teacher]
+        y_teacher = [F.layer_norm(block, (block.size(-1),)) for block in y_teacher]
 
         loss = loss_fn(y_student, y_teacher, mask, n_layers=n_layers, lambda_var=lambda_var)
         train_loss += loss.item()
@@ -141,7 +144,8 @@ def validate(model: torch.nn.Module,
         #loss = sum(losses)
         
         # normalize teacher
-        y_teacher = [F.normalize(block, dim=-1) for block in y_teacher]
+        #y_teacher = [F.normalize(block, dim=-1) for block in y_teacher]
+        y_teacher = [F.layer_norm(block, (block.size(-1),)) for block in y_teacher]
 
         loss = loss_fn(y_student, y_teacher, mask, n_layers=n_layers, lambda_var=lambda_var)
 
@@ -153,7 +157,7 @@ def validate(model: torch.nn.Module,
 
 def main(config_fn='settings.yaml'):
     cfg = read_yaml(config_fn)
-    logger = init_log('trainer', level=cfg.get('log_level', 'info'))
+    logger = init_log('trainer', filename='train.log', level=cfg.get('log_level', 'info'))
 
     min_duration = cfg.get('min_duration')
     max_duration = cfg.get('max_duration', 10.0)
@@ -181,8 +185,28 @@ def main(config_fn='settings.yaml'):
 
     logger.info(f'got {len(train_files)} for training, {len(val_files)} for validation')
 
-    ds_train = RawAudioDataset(train_files, sample_rate=sample_rate, max_duration=max_duration)
-    ds_val = RawAudioDataset(val_files, sample_rate=sample_rate, max_duration=max_duration)
+    n_fft = cfg.get('n_fft', 1024)
+    hop_length = cfg.get('hop_length')
+    n_mels = cfg.get('n_mels', 64)
+    max_length = 288
+
+    #ds_train = RawAudioDataset(train_files, sample_rate=sample_rate, max_duration=max_duration)
+    #ds_val = RawAudioDataset(val_files, sample_rate=sample_rate, max_duration=max_duration)
+    ds_train = MelDataset(
+        filenames=train_files, 
+        sample_rate=sample_rate, 
+        max_length=max_length, 
+        n_mels=n_mels,
+        n_fft=n_fft,
+        hop_length=hop_length)
+
+    ds_val = MelDataset(
+        filenames=val_files, 
+        sample_rate=sample_rate, 
+        max_length=max_length, 
+        n_mels=n_mels,
+        n_fft=n_fft,
+        hop_length=hop_length)
 
     train_loader = torch.utils.data.DataLoader(ds_train, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     val_loader = torch.utils.data.DataLoader(ds_val, batch_size=batch_size, num_workers=num_workers)
@@ -192,12 +216,14 @@ def main(config_fn='settings.yaml'):
     d_ff = cfg.get('d_ff')
     n_heads = cfg.get('n_heads')
     n_layers = cfg.get('n_layers')
+    
     max_sequence_length = cfg.get('max_sequence_length', 256)
 
     p_masking = cfg.get('p_masking', 0.065)
     masking_length = cfg.get('masking_length', 10)
 
     ema_decay = cfg.get('ema_decay', 0.999)
+    lambda_var = cfg.get('lambda_var', 1.0)
 
     logger.info(f'd_model={d_model}, d_ff={d_ff}, n_heads={n_heads}, n_layers={n_layers}')
 
@@ -207,13 +233,14 @@ def main(config_fn='settings.yaml'):
         n_layers=n_layers,
         d_ff=d_ff,
         n_heads=n_heads,
+        n_mels=n_mels,
         max_sequence_length=max_sequence_length,
         p_masking=p_masking,
         masking_length=masking_length)
     target = deepcopy(model)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1.0)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: step_lr(step, d_model, warmup_steps=4000))
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: step_lr(step, d_model, warmup_steps=8000))
     logger.info(f'model size {model_size(model)/1e6:.1f}M')
 
     model = model.to(device)
@@ -225,11 +252,11 @@ def main(config_fn='settings.yaml'):
     for epoch in range(epochs):
         t0 = time.time()
 
-        train_loss = train(model, target, train_loader, optimizer, scheduler, log_interval=log_interval, ema_decay=ema_decay)
+        train_loss = train(model, target, train_loader, optimizer, scheduler, log_interval=log_interval, ema_decay=ema_decay, lambda_var=lambda_var)
         dt = time.time() - t0
         logger.info(f'epoch {epoch + 1} training done in {dt:.1f} seconds, training loss {train_loss:.4f}')
 
-        val_loss, val_var = validate(model, target, val_loader)
+        val_loss, val_var = validate(model, target, val_loader, lambda_var=lambda_var)
         logger.info(f'epoch {epoch + 1} validation loss {val_loss:.4f}, avg variance {val_var:.4f}')
 
         if val_loss < best_loss:
