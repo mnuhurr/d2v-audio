@@ -143,15 +143,9 @@ def train(model: torch.nn.Module,
     for batch, x in enumerate(loader):
         x = x.to(device)
 
-        y_student, mask = model(x, student_mode=True)
+        y_student, mask = model(x, mode='student')
         with torch.no_grad():
-            y_teacher, _ = target(x, student_mode=False)
-
-        # take the n_layers last layers for comparison
-        #losses = []
-        #for u, v in zip(y_student[-n_layers:], y_teacher[-n_layers:]):
-        #    losses.append(mask_loss(u, v, mask))
-        #loss = sum(losses)
+            y_teacher = target(x, mode='teacher')
 
         # normalize teacher
         y_teacher = [normalize_block(block) for block in y_teacher]
@@ -202,15 +196,9 @@ def validate(model: torch.nn.Module,
     for x in loader:
         x = x.to(device)
 
-        y_student, mask = model(x, student_mode=True)
-        y_teacher, _ = target(x, student_mode=False)
+        y_student, mask = model(x, mode='student')
+        y_teacher = target(x, mode='teacher')
 
-        # take the n_layers last layers for comparison
-        #losses = []
-        #for u, v in zip(y_student[-n_layers:], y_teacher[-n_layers:]):
-        #    losses.append(mask_loss(u, v, mask))
-        #loss = sum(losses)
-        
         # normalize teacher
         y_teacher = [normalize_block(block) for block in y_teacher]
 

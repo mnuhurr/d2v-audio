@@ -5,7 +5,7 @@ from .encoders import WaveEncoder
 from .encoders import MelEncoder
 from .transformer import TransformerEncoder, EncoderLayer
 
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 
 
 class D2VEncoder(torch.nn.Module):
@@ -37,25 +37,34 @@ class D2VEncoder(torch.nn.Module):
         self.register_buffer('p_masking', torch.tensor(p_masking), persistent=False)
         self.register_buffer('masking_length', torch.tensor(masking_length), persistent=False)
 
-    def forward(self, x: torch.Tensor, student_mode: bool = False) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def forward(self, x: torch.Tensor, mode: str = 'encoder') -> Tuple[torch.Tensor, Any]:
+        assert mode in ['encoder', 'student', 'teacher']
+
         x = self.encoder(x)
         x = x.permute(0, 2, 1)
 
         # todo: input padding/masking
 
         mask = None
-        if student_mode:
+        if mode == 'student':
             x, mask = self.mask_tokens(x, mask_token=self.mask_token)
 
         x, attn_weights = self.transformer(x)
 
-        if student_mode:
+        if mode == 'student':
             x_proj, proj_attn_weights = self.projection(x[-1])
             x.append(x_proj)
+            attn_weights.append(proj_attn_weights)
 
         # todo: return attention weights?
 
-        return x, mask
+        if mode == 'encoder':
+            return x, attn_weights
+        elif mode == 'student':
+            return x, mask
+        elif mode == 'teacher':
+            return x
+
 
     def mask_tokens(self,
                     x: torch.Tensor,
