@@ -48,18 +48,24 @@ def step_lr(step, d_model, warmup_steps=4000):
     return 1 / math.sqrt(d_model) * torch.minimum(arg1, arg2)
 
 
-def avg_var(x: torch.Tensor):
+def avg_var(x: torch.Tensor) -> torch.Tensor:
     vars = torch.var(x, dim=-2)
     return torch.mean(vars)
 
 
+def normalize_block(x: torch.Tensor) -> torch.Tensor:
+    mu = x.mean(dim=(-2, -1)).unsqueeze(-1).unsqueeze(-1)
+    s = x.std(dim=(-2, -1)).unsqueeze(-1).unsqueeze(-1)
+    return (x - mu) / s
+
+
 def loss_fn(y_student: List[torch.Tensor], y_teacher: List[torch.Tensor], mask: torch.Tensor, n_layers: int = 8, lambda_var: float = 1.0):
-    avg_student = torch.mean(torch.stack(y_student[-n_layers:]), dim=0)
+    #avg_student = torch.mean(torch.stack(y_student[-n_layers:]), dim=0)
     avg_teacher = torch.mean(torch.stack(y_teacher[-n_layers:]), dim=0)
 
     var_loss = F.relu(1 - avg_var(y_teacher[-1]))
 
-    loss = mask_loss(avg_student, avg_teacher, mask) + lambda_var * var_loss
+    loss = mask_loss(y_student[-1], avg_teacher, mask) + lambda_var * var_loss
 
     return loss
 
@@ -95,8 +101,7 @@ def train(model: torch.nn.Module,
         #loss = sum(losses)
 
         # normalize teacher
-        #y_teacher = [F.normalize(block, dim=-1) for block in y_teacher]
-        y_teacher = [F.layer_norm(block, (block.size(-1),)) for block in y_teacher]
+        y_teacher = [normalize_block(block) for block in y_teacher]
 
         loss = loss_fn(y_student, y_teacher, mask, n_layers=n_layers, lambda_var=lambda_var)
         train_loss += loss.item()
@@ -145,8 +150,7 @@ def validate(model: torch.nn.Module,
         #loss = sum(losses)
         
         # normalize teacher
-        #y_teacher = [F.normalize(block, dim=-1) for block in y_teacher]
-        y_teacher = [F.layer_norm(block, (block.size(-1),)) for block in y_teacher]
+        y_teacher = [normalize_block(block) for block in y_teacher]
 
         loss = loss_fn(y_student, y_teacher, mask, n_layers=n_layers, lambda_var=lambda_var)
 
