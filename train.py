@@ -11,19 +11,27 @@ import torch.nn.functional as F
 import audiofile as af
 
 from common import init_log, read_yaml
-from dataset import RawAudioDataset
 from dataset import MelDataset
 from models import D2VEncoder
 from models.utils import model_size, ema_update
 from models.masking import simulate_masking
 
-from typing import List, Union, Optional, Any
+from typing import List, Union, Optional, Any, Tuple
 
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 
 def get_dir_filenames(dir_path: Union[str, Path], ext: str = '.wav', min_duration: Optional[float] = None) -> List[Path]:
+    """
+    get list of suitable files in a directory. the file durations are not read if min_duration is not given (improves
+    speed significantly)
+
+    :param dir_path: directory containing the files
+    :param ext: file extension ('.wav' by default)
+    :param min_duration: (optional) minimum duration (in seconds)
+    :return: list of Path objects
+    """
     filenames = list(Path(dir_path).glob(f'*{ext}'))
 
     if min_duration is not None:
@@ -32,16 +40,30 @@ def get_dir_filenames(dir_path: Union[str, Path], ext: str = '.wav', min_duratio
     return filenames
 
 
-def mask_loss(y_pred, y_true, mask, loss_object=F.mse_loss):
-    loss = loss_object(y_pred, y_true, reduction='none')
+def mask_loss(y_pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """
+    compute mse loss for the masked positions. masked positions are marked with negative values.
+
+    :param y_pred:
+    :param y_true:
+    :param mask:
+    :return:
+    """
+    loss = F.mse_loss(y_pred, y_true, reduction='none')
     # count loss from the masked positions
     mask = (mask < 0).to(loss.dtype)
     mask = mask.unsqueeze(-1)
     return torch.sum(loss * mask) / torch.sum(mask).to(loss.dtype)
 
 
-def step_lr(step, d_model, warmup_steps=4000):
-    # learning rate from the original attention paper
+def step_lr(step: int, d_model: int, warmup_steps: int = 4000) -> float:
+    """
+    step size from the original attention paper
+    :param step:
+    :param d_model:
+    :param warmup_steps:
+    :return:
+    """
     arg1 = torch.tensor(1 / math.sqrt(step)) if step > 0 else torch.tensor(float('inf'))
     arg2 = torch.tensor(step * warmup_steps**-1.5)
 
@@ -49,18 +71,36 @@ def step_lr(step, d_model, warmup_steps=4000):
 
 
 def avg_var(x: torch.Tensor) -> torch.Tensor:
+    """
+    compute average variance for the coordinate representations (i.e. dim=-2)
+    :param x: batch tensor
+    :return: average variance
+    """
     vars = torch.var(x, dim=-2)
     return torch.mean(vars)
 
 
 def normalize_block(x: torch.Tensor) -> torch.Tensor:
+    """
+    normalize all inputs in the batch by their mean/stddev
+    :param x: batch tensor
+    :return: normalized batch
+    """
     mu = x.mean(dim=(-2, -1)).unsqueeze(-1).unsqueeze(-1)
     s = x.std(dim=(-2, -1)).unsqueeze(-1).unsqueeze(-1)
     return (x - mu) / s
 
 
 def loss_fn(y_student: List[torch.Tensor], y_teacher: List[torch.Tensor], mask: torch.Tensor, n_layers: int = 8, lambda_var: float = 1.0):
-    #avg_student = torch.mean(torch.stack(y_student[-n_layers:]), dim=0)
+    """
+    general loss function used for train/validation
+    :param y_student: outputs from the student network
+    :param y_teacher: outputs from the teacher network
+    :param mask: mask (from the student network)
+    :param n_layers: number of layers to average from the teacher output
+    :param lambda_var:
+    :return:
+    """
     avg_teacher = torch.mean(torch.stack(y_teacher[-n_layers:]), dim=0)
 
     var_loss = F.relu(1 - avg_var(y_teacher[-1]))
@@ -78,8 +118,21 @@ def train(model: torch.nn.Module,
           log_interval: Optional[int] = 100,
           n_layers: int = 8,
           ema_decay: float = 0.999,
-          lambda_var: float = 1.0):
+          lambda_var: float = 0.0) -> float:
+    """
+    training for one epoch.
 
+    :param model: student network
+    :param target: teacher network
+    :param loader: dataloader
+    :param optimizer: optimizer
+    :param scheduler: optional learning rate scheduler
+    :param log_interval: optional interval of batches for intermediate printouts
+    :param n_layers: number of layers to include in the teacher network output average
+    :param ema_decay: ema decay value
+    :param lambda_var: multiplier for variance loss
+    :return: training loss
+    """
     model.train()
     target.train()
 
@@ -129,8 +182,17 @@ def validate(model: torch.nn.Module,
              target: torch.nn.Module,
              loader: torch.utils.data.DataLoader,
              n_layers: int = 8,
-             lambda_var: float = 1.0):
+             lambda_var: float = 1.0) -> Tuple[float, float]:
+    """
+    validation for one epoch.
 
+    :param model: student network
+    :param target: teacher network
+    :param loader: dataloader
+    :param n_layers: number of layers to include in the teacher network output average
+    :param lambda_var: multiplier for variance loss
+    :return: tuple containing validation loss and avg coordinate variance
+    """
     model.eval()
     target.eval()
 
@@ -190,13 +252,12 @@ def main(config_fn='settings.yaml'):
 
     logger.info(f'got {len(train_files)} for training, {len(val_files)} for validation')
 
+    # with 16kHz sampling rate, n_fft=1024, hop_length=512 an eight-second clip will be 251 mel frames.
     n_fft = cfg.get('n_fft', 1024)
     hop_length = cfg.get('hop_length')
     n_mels = cfg.get('n_mels', 64)
     max_length = 250
 
-    #ds_train = RawAudioDataset(train_files, sample_rate=sample_rate, max_duration=max_duration)
-    #ds_val = RawAudioDataset(val_files, sample_rate=sample_rate, max_duration=max_duration)
     ds_train = MelDataset(
         filenames=train_files, 
         sample_rate=sample_rate, 
@@ -221,7 +282,8 @@ def main(config_fn='settings.yaml'):
     d_ff = cfg.get('d_ff')
     n_heads = cfg.get('n_heads')
     n_layers = cfg.get('n_layers')
-    
+
+    # this affects to the positional encoding size
     max_sequence_length = cfg.get('max_sequence_length', 256)
 
     p_masking = cfg.get('p_masking', 0.065)
@@ -259,6 +321,7 @@ def main(config_fn='settings.yaml'):
     patience = max_patience
     best_loss = float('inf')
 
+    logger.info(f'start training for {epochs} epochs')
     for epoch in range(epochs):
         t0 = time.time()
 

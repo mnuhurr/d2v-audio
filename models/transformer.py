@@ -110,22 +110,3 @@ class TransformerEncoder(torch.nn.Module):
 
         return layer_outputs, attn_weights
 
-
-def foo():
-    x = torch.randn(2, 12, 8)
-    y = torch.randn(2, 14, 8)
-
-    mask = -float('inf') * torch.ones(2, x.size(1))
-    mask[:, :10] = 0
-
-    xmask = -float('inf') * torch.ones(2, y.size(1))
-    xmask[:, :12] = 0
-
-    enc = TransformerEncoder(8, 4, 32, 2, 64)
-    y, w = enc(x, mask=mask)
-
-    print(torch.stack(y).shape)
-
-
-if __name__ == '__main__':
-    foo()
