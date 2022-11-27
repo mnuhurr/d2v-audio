@@ -134,7 +134,7 @@ def train(model: torch.nn.Module,
     :return: training loss
     """
     model.train()
-    target.train()
+    target.eval()
 
     train_loss = 0.0
 
@@ -143,9 +143,9 @@ def train(model: torch.nn.Module,
     for batch, x in enumerate(loader):
         x = x.to(device)
 
-        y_student, mask = model(x, masking=True)
+        y_student, mask = model(x, student_mode=True)
         with torch.no_grad():
-            y_teacher, _ = target(x, masking=False)
+            y_teacher, _ = target(x, student_mode=False)
 
         # take the n_layers last layers for comparison
         #losses = []
@@ -202,8 +202,8 @@ def validate(model: torch.nn.Module,
     for x in loader:
         x = x.to(device)
 
-        y_student, mask = model(x, masking=True)
-        y_teacher, _ = target(x, masking=False)
+        y_student, mask = model(x, student_mode=True)
+        y_teacher, _ = target(x, student_mode=False)
 
         # take the n_layers last layers for comparison
         #losses = []
@@ -235,7 +235,7 @@ def main(config_fn='settings.yaml'):
     epochs = cfg.get('epochs', 10)
 
     log_interval = cfg.get('log_interval', 100)
-    max_patience = cfg.get('patience', 5)
+    max_patience = cfg.get('patience')
 
     model_path = Path(cfg.get('model_path', 'model.pt'))
     model_path.parent.mkdir(exist_ok=True, parents=True)
@@ -256,7 +256,7 @@ def main(config_fn='settings.yaml'):
     n_fft = cfg.get('n_fft', 1024)
     hop_length = cfg.get('hop_length')
     n_mels = cfg.get('n_mels', 64)
-    max_length = 250
+    max_length = 280
 
     ds_train = MelDataset(
         filenames=train_files, 
@@ -332,17 +332,23 @@ def main(config_fn='settings.yaml'):
         val_loss, val_var = validate(model, target, val_loader, lambda_var=lambda_var)
         logger.info(f'epoch {epoch + 1} validation loss {val_loss:.4f}, avg variance {val_var:.4f}')
 
-        if val_loss < best_loss:
-            patience = max_patience
-            best_loss = val_loss
-            # save
-            torch.save(model.state_dict(), model_path)
+        if max_patience is not None:
+            if val_loss < best_loss:
+                patience = max_patience
+                best_loss = val_loss
+                # save
+                torch.save(model.state_dict(), model_path)
 
-        else:
-            patience -= 1
-            if patience <= 0:
-                logger.info(f'results not improving, stopping')
-                break
+            else:
+                patience -= 1
+                if patience <= 0:
+                    logger.info(f'results not improving, stopping')
+                    break
+
+    if 'final_model_path' in cfg:
+        torch.save(model.state_dict(), cfg['final_model_path'])
+
+
 
 if __name__ == '__main__':
     main()

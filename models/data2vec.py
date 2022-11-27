@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 from .encoders import WaveEncoder
 from .encoders import MelEncoder
-from .transformer import TransformerEncoder
+from .transformer import TransformerEncoder, EncoderLayer
 
 from typing import Tuple, Optional
 
@@ -30,20 +30,30 @@ class D2VEncoder(torch.nn.Module):
             n_heads=n_heads,
             max_sequence_length=max_sequence_length)
 
+        self.projection = EncoderLayer(d_model, d_ff, n_heads)
+
         self.register_buffer('mask_token', torch.randn(d_model))
 
         self.register_buffer('p_masking', torch.tensor(p_masking), persistent=False)
         self.register_buffer('masking_length', torch.tensor(masking_length), persistent=False)
 
-    def forward(self, x: torch.Tensor, masking: bool = False) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def forward(self, x: torch.Tensor, student_mode: bool = False) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         x = self.encoder(x)
         x = x.permute(0, 2, 1)
 
+        # todo: input padding/masking
+
         mask = None
-        if masking:
+        if student_mode:
             x, mask = self.mask_tokens(x, mask_token=self.mask_token)
 
         x, attn_weights = self.transformer(x)
+
+        if student_mode:
+            x_proj, proj_attn_weights = self.projection(x[-1])
+            x.append(x_proj)
+
+        # todo: return attention weights?
 
         return x, mask
 
