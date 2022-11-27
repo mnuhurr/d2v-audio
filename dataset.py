@@ -38,7 +38,8 @@ class MelDataset(torch.utils.data.Dataset):
                  n_mels: int = 64,
                  n_fft: int = 1024,
                  hop_length: Optional[int] = None,
-                 max_length: int = 320):
+                 max_length: int = 320,
+                 log_mel_scaling: float = 0.1):
 
         super().__init__()
 
@@ -51,6 +52,8 @@ class MelDataset(torch.utils.data.Dataset):
             n_fft=n_fft, 
             hop_length=hop_length,
             n_mels=n_mels)
+
+        self.scaling = log_mel_scaling
 
     def __len__(self):
         return len(self.filenames)
@@ -71,4 +74,7 @@ class MelDataset(torch.utils.data.Dataset):
             offset = torch.randint(mels.size(-1) - self.max_length, size=(1,))[0]
             mels = mels[:, offset:offset + self.max_length]
 
-        return mels
+        log_mels = self.scaling * torch.log(mels + torch.finfo(torch.float32).eps)
+
+        return log_mels
+
