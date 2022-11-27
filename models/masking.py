@@ -43,6 +43,19 @@ def mask_tokens(x: torch.Tensor,
     return x, mask
 
 
+def simulate_masking(p, mask_len, n_rounds=1000, batch_size=512, num_timesteps=16):
+    dim = 1
+    
+    total_masked = 0
+    for r in range(n_rounds):
+        x = torch.zeros(batch_size, num_timesteps, dim)
+        xm, mask = mask_tokens(x, p_masking=p, masking_length=mask_len)
+
+        total_masked += torch.sum(mask < 0)
+
+    return total_masked / (n_rounds * batch_size * num_timesteps)
+
+
 def foo():
     x = torch.randn(2, 24, 8)
     mt = torch.ones(8)

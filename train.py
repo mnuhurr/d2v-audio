@@ -15,6 +15,7 @@ from dataset import RawAudioDataset
 from dataset import MelDataset
 from models import D2VEncoder
 from models.utils import model_size, ema_update
+from models.masking import simulate_masking
 
 from typing import List, Union, Optional, Any
 
@@ -221,11 +222,15 @@ def main(config_fn='settings.yaml'):
 
     p_masking = cfg.get('p_masking', 0.065)
     masking_length = cfg.get('masking_length', 10)
+    p_token_mask = simulate_masking(p_masking, masking_length, num_timesteps=16)
+    logger.info(f'p_masking={p_masking}, masking_length={masking_length}, fraction of masked tokens approx {p_token_mask:.3f}')
 
+    learning_rate = cfg.get('learning_rate_factor', 1.0)
     ema_decay = cfg.get('ema_decay', 0.999)
     lambda_var = cfg.get('lambda_var', 1.0)
     warmup = cfg.get('warmup_steps', 4000)
-
+    
+    logger.info(f'learning_rate_factor={learning_rate}, ema_decay={ema_decay}, warmup_steps={warmup}, lambda_var={lambda_var}')
     logger.info(f'd_model={d_model}, d_ff={d_ff}, n_heads={n_heads}, n_layers={n_layers}')
 
     # encoder
@@ -240,7 +245,7 @@ def main(config_fn='settings.yaml'):
         masking_length=masking_length)
     target = deepcopy(model)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: step_lr(step, d_model, warmup_steps=warmup))
     logger.info(f'model size {model_size(model)/1e6:.1f}M')
 
