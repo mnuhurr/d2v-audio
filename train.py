@@ -224,6 +224,7 @@ def main(config_fn='settings.yaml'):
 
     ema_decay = cfg.get('ema_decay', 0.999)
     lambda_var = cfg.get('lambda_var', 1.0)
+    warmup = cfg.get('warmup_steps', 4000)
 
     logger.info(f'd_model={d_model}, d_ff={d_ff}, n_heads={n_heads}, n_layers={n_layers}')
 
@@ -240,7 +241,7 @@ def main(config_fn='settings.yaml'):
     target = deepcopy(model)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: step_lr(step, d_model, warmup_steps=8000))
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: step_lr(step, d_model, warmup_steps=warmup))
     logger.info(f'model size {model_size(model)/1e6:.1f}M')
 
     model = model.to(device)

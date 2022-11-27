@@ -7,8 +7,8 @@ def main():
     batch_len = 16
     dim = 1
     
-    p = 0.15
-    masklen = 5
+    p = 0.1
+    masklen = 8
 
     total_masked = 0
 
