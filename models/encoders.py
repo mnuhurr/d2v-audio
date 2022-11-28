@@ -63,10 +63,29 @@ class MelEncoder(torch.nn.Module):
         super().__init__()
 
         self.layers = torch.nn.Sequential(
-            NormalizedCausalConvBlock(n_mels, d_model, kernel_size=7, stride=4),
+            torch.nn.Conv1d(n_mels, d_model, kernel_size=3, padding=1),
+            torch.nn.GELU(),
+            torch.nn.Conv1d(d_model, d_model, kernel_size=3, stride=2, padding=1),
+            torch.nn.GELU(),
+        )
+        """
+        self.layers = torch.nn.Sequential(
+            NormalizedCausalConvBlock(n_mels, d_model, kernel_size=3, stride=2),
+            NormalizedCausalConvBlock(d_model, d_model, kernel_size=3, stride=2),
             NormalizedCausalConvBlock(d_model, d_model, kernel_size=3, stride=2),
             NormalizedCausalConvBlock(d_model, d_model, kernel_size=3, stride=2),
         )
+
+        self.layers = torch.nn.Sequential(
+            torch.nn.Conv1d(n_mels, d_model, kernel_size=7, stride=4),
+            torch.nn.BatchNorm1d(d_model),
+            torch.nn.GELU(),
+
+            torch.nn.Conv1d(d_model, d_model, kernel_size=3, stride=2),
+            torch.nn.BatchNorm1d(d_model),
+            torch.nn.GELU(),
+        )
+        """
 
     def forward(self, x):
         return self.layers(x)

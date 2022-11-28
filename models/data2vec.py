@@ -5,7 +5,7 @@ from .encoders import WaveEncoder
 from .encoders import MelEncoder
 from .transformer import TransformerEncoder, EncoderLayer
 
-from typing import Tuple, Optional, Any
+from typing import Tuple, Optional, Any, Union
 
 
 class D2VEncoder(torch.nn.Module):
@@ -30,16 +30,17 @@ class D2VEncoder(torch.nn.Module):
             n_heads=n_heads,
             max_sequence_length=max_sequence_length)
 
-        self.projection = EncoderLayer(d_model, d_ff, n_heads)
+        self.projection = torch.nn.Linear(d_model, d_model)
 
-        self.register_buffer('mask_token', torch.randn(d_model))
+        self.mask_token = torch.nn.Parameter(0.1 * torch.randn(d_model))
 
         self.register_buffer('p_masking', torch.tensor(p_masking), persistent=False)
         self.register_buffer('masking_length', torch.tensor(masking_length), persistent=False)
 
-    def forward(self, x: torch.Tensor, mode: str = 'encoder') -> Tuple[torch.Tensor, Any]:
+    def forward(self, x: torch.Tensor, mode: str = 'encoder') -> Union[torch.Tensor, Tuple[torch.Tensor, Any]]:
         assert mode in ['encoder', 'student', 'teacher']
 
+        # extract tokens
         x = self.encoder(x)
         x = x.permute(0, 2, 1)
 
@@ -47,17 +48,17 @@ class D2VEncoder(torch.nn.Module):
 
         mask = None
         if mode == 'student':
-            x, mask = self.mask_tokens(x, mask_token=self.mask_token)
+            x, mask = self.mask_tokens(x)
 
+        # get transformer outputs
         x, attn_weights = self.transformer(x)
 
+        # if we are in the student mode also compute the projection and add it to the same output list
         if mode == 'student':
-            x_proj, proj_attn_weights = self.projection(x[-1])
+            x_proj = self.projection(x[-1])
             x.append(x_proj)
-            attn_weights.append(proj_attn_weights)
 
-        # todo: return attention weights?
-
+        # return attention weights for other modes?
         if mode == 'encoder':
             return x, attn_weights
         elif mode == 'student':
@@ -95,8 +96,7 @@ class D2VEncoder(torch.nn.Module):
             i = start_ind[0][k]
             j = start_ind[1][k]
 
-            if mask_token is not None:
-                x[i, j:j + self.masking_length, :] = mask_token
+            x[i, j:j + self.masking_length, :] = self.mask_token
 
             mask[i, j:j + self.masking_length] = -float('inf')
 

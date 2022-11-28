@@ -40,6 +40,18 @@ def get_dir_filenames(dir_path: Union[str, Path], ext: str = '.wav', min_duratio
     return filenames
 
 
+def smoothed_l1_loss(y_pred: torch.Tensor, y_true: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    # no reduction
+    e = torch.abs(y_pred - y_true)
+
+    ind = e <= beta
+
+    e[ind] = 0.5 * e[ind]**2 / beta
+    e[~ind] = e[~ind] - 0.5 * beta
+
+    return e
+
+
 def mask_loss(y_pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     """
     compute mse loss for the masked positions. masked positions are marked with negative values.
@@ -49,11 +61,31 @@ def mask_loss(y_pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) ->
     :param mask:
     :return:
     """
-    loss = F.mse_loss(y_pred, y_true, reduction='none')
+    #loss = F.mse_loss(y_pred, y_true, reduction='none')
+    loss = smoothed_l1_loss(y_pred, y_true, beta=1.5)
     # count loss from the masked positions
     mask = (mask < 0).to(loss.dtype)
     mask = mask.unsqueeze(-1)
     return torch.sum(loss * mask) / torch.sum(mask).to(loss.dtype)
+
+
+def loss_fn(y_student: List[torch.Tensor], y_teacher: List[torch.Tensor], mask: torch.Tensor, n_layers: int = 8, lambda_var: float = 1.0):
+    """
+    general loss function used for train/validation
+    :param y_student: outputs from the student network
+    :param y_teacher: outputs from the teacher network
+    :param mask: mask (from the student network)
+    :param n_layers: number of layers to average from the teacher output
+    :param lambda_var:
+    :return:
+    """
+    avg_teacher = torch.mean(torch.stack(y_teacher[-n_layers:]), dim=0)
+
+    var_loss = F.relu(1 - avg_var(y_teacher[-1]))
+
+    loss = mask_loss(y_student[-1], avg_teacher, mask) + lambda_var * var_loss
+
+    return loss
 
 
 def step_lr(step: int, d_model: int, warmup_steps: int = 4000) -> float:
@@ -86,28 +118,10 @@ def normalize_block(x: torch.Tensor) -> torch.Tensor:
     :param x: batch tensor
     :return: normalized batch
     """
-    mu = x.mean(dim=(-2, -1)).unsqueeze(-1).unsqueeze(-1)
-    s = x.std(dim=(-2, -1)).unsqueeze(-1).unsqueeze(-1)
-    return (x - mu) / s
-
-
-def loss_fn(y_student: List[torch.Tensor], y_teacher: List[torch.Tensor], mask: torch.Tensor, n_layers: int = 8, lambda_var: float = 1.0):
-    """
-    general loss function used for train/validation
-    :param y_student: outputs from the student network
-    :param y_teacher: outputs from the teacher network
-    :param mask: mask (from the student network)
-    :param n_layers: number of layers to average from the teacher output
-    :param lambda_var:
-    :return:
-    """
-    avg_teacher = torch.mean(torch.stack(y_teacher[-n_layers:]), dim=0)
-
-    var_loss = F.relu(1 - avg_var(y_teacher[-1]))
-
-    loss = mask_loss(y_student[-1], avg_teacher, mask) + lambda_var * var_loss
-
-    return loss
+    #mu = x.mean(dim=(-2, -1)).unsqueeze(-1).unsqueeze(-1)
+    #s = x.std(dim=(-2, -1)).unsqueeze(-1).unsqueeze(-1)
+    #return (x - mu) / s
+    return F.layer_norm(x, (x.size(-1),))
 
 
 def train(model: torch.nn.Module,
@@ -134,7 +148,7 @@ def train(model: torch.nn.Module,
     :return: training loss
     """
     model.train()
-    target.eval()
+    target.train()
 
     train_loss = 0.0
 
@@ -276,7 +290,7 @@ def main(config_fn='settings.yaml'):
 
     p_masking = cfg.get('p_masking', 0.065)
     masking_length = cfg.get('masking_length', 10)
-    p_token_mask = simulate_masking(p_masking, masking_length, num_timesteps=16)
+    p_token_mask = simulate_masking(p_masking, masking_length, num_timesteps=120)
     logger.info(f'p_masking={p_masking}, masking_length={masking_length}, fraction of masked tokens approx {p_token_mask:.3f}')
 
     learning_rate = cfg.get('learning_rate_factor', 1.0)
