@@ -41,6 +41,15 @@ def get_dir_filenames(dir_path: Union[str, Path], ext: str = '.wav', min_duratio
 
 
 def smoothed_l1_loss(y_pred: torch.Tensor, y_true: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    """
+    smoothed loss from the paper. for values with absolute error at most beta returns l2 loss, otherwise l1.
+    this function does not do any reduction.
+    
+    :param y_pred:
+    :param y_true:
+    :param beta: threshold value for smoothing
+    :return: tensor of smoothed losses
+    """
     # no reduction
     e = torch.abs(y_pred - y_true)
 
