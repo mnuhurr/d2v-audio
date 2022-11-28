@@ -69,17 +69,17 @@ def mask_loss(y_pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) ->
     return torch.sum(loss * mask) / torch.sum(mask).to(loss.dtype)
 
 
-def loss_fn(y_student: List[torch.Tensor], y_teacher: List[torch.Tensor], mask: torch.Tensor, n_layers: int = 8, lambda_var: float = 1.0):
+def loss_fn(y_student: List[torch.Tensor], y_teacher: List[torch.Tensor], mask: torch.Tensor, n_teacher_layers: int = 8, lambda_var: float = 1.0):
     """
     general loss function used for train/validation
     :param y_student: outputs from the student network
     :param y_teacher: outputs from the teacher network
     :param mask: mask (from the student network)
-    :param n_layers: number of layers to average from the teacher output
+    :param n_teacher_layers: number of layers to average from the teacher output
     :param lambda_var:
     :return:
     """
-    avg_teacher = torch.mean(torch.stack(y_teacher[-n_layers:]), dim=0)
+    avg_teacher = torch.mean(torch.stack(y_teacher[-n_teacher_layers:]), dim=0)
 
     var_loss = F.relu(1 - avg_var(y_teacher[-1]))
 
@@ -130,7 +130,7 @@ def train(model: torch.nn.Module,
           optimizer: torch.optim.Optimizer,
           scheduler: Optional[Any] = None,
           log_interval: Optional[int] = 100,
-          n_layers: int = 8,
+          n_teacher_layers: int = 8,
           ema_decay: float = 0.999,
           lambda_var: float = 0.0) -> float:
     """
@@ -142,7 +142,7 @@ def train(model: torch.nn.Module,
     :param optimizer: optimizer
     :param scheduler: optional learning rate scheduler
     :param log_interval: optional interval of batches for intermediate printouts
-    :param n_layers: number of layers to include in the teacher network output average
+    :param n_teacher_layers: number of layers to include in the teacher network output average
     :param ema_decay: ema decay value
     :param lambda_var: multiplier for variance loss
     :return: training loss
@@ -164,7 +164,7 @@ def train(model: torch.nn.Module,
         # normalize teacher
         y_teacher = [normalize_block(block) for block in y_teacher]
 
-        loss = loss_fn(y_student, y_teacher, mask, n_layers=n_layers, lambda_var=lambda_var)
+        loss = loss_fn(y_student, y_teacher, mask, n_teacher_layers=n_teacher_layers, lambda_var=lambda_var)
         train_loss += loss.item()
 
         optimizer.zero_grad()
@@ -189,7 +189,7 @@ def train(model: torch.nn.Module,
 def validate(model: torch.nn.Module,
              target: torch.nn.Module,
              loader: torch.utils.data.DataLoader,
-             n_layers: int = 8,
+             n_teacher_layers: int = 8,
              lambda_var: float = 1.0) -> Tuple[float, float]:
     """
     validation for one epoch.
@@ -197,7 +197,7 @@ def validate(model: torch.nn.Module,
     :param model: student network
     :param target: teacher network
     :param loader: dataloader
-    :param n_layers: number of layers to include in the teacher network output average
+    :param n_teacher_layers: number of layers to include in the teacher network output average
     :param lambda_var: multiplier for variance loss
     :return: tuple containing validation loss and avg coordinate variance
     """
@@ -216,7 +216,7 @@ def validate(model: torch.nn.Module,
         # normalize teacher
         y_teacher = [normalize_block(block) for block in y_teacher]
 
-        loss = loss_fn(y_student, y_teacher, mask, n_layers=n_layers, lambda_var=lambda_var)
+        loss = loss_fn(y_student, y_teacher, mask, n_teacher_layers=n_teacher_layers, lambda_var=lambda_var)
 
         val_loss += loss.item()
         val_vars += avg_var(y_teacher[-1])
@@ -226,7 +226,7 @@ def validate(model: torch.nn.Module,
 
 def main(config_fn='settings.yaml'):
     cfg = read_yaml(config_fn)
-    logger = init_log('trainer', filename='train.log', level=cfg.get('log_level', 'info'))
+    logger = init_log('trainer', filename=cfg.get('train_log_filename'), level=cfg.get('log_level', 'info'))
 
     min_duration = cfg.get('min_duration')
     max_duration = cfg.get('max_duration', 10.0)
@@ -293,12 +293,15 @@ def main(config_fn='settings.yaml'):
     p_token_mask = simulate_masking(p_masking, masking_length, num_timesteps=120)
     logger.info(f'p_masking={p_masking}, masking_length={masking_length}, fraction of masked tokens approx {p_token_mask:.3f}')
 
+    # number of layers from the teacher network to average over
+    n_teacher_layers = cfg.get('n_teacher_layers', 8)
+
     learning_rate = cfg.get('learning_rate_factor', 1.0)
     ema_decay = cfg.get('ema_decay', 0.999)
     lambda_var = cfg.get('lambda_var', 1.0)
     warmup = cfg.get('warmup_steps', 4000)
     
-    logger.info(f'learning_rate_factor={learning_rate}, ema_decay={ema_decay}, warmup_steps={warmup}, lambda_var={lambda_var}')
+    logger.info(f'learning_rate_factor={learning_rate}, ema_decay={ema_decay}, warmup_steps={warmup}, lambda_var={lambda_var}, n_teacher_layers={n_teacher_layers}')
     logger.info(f'd_model={d_model}, d_ff={d_ff}, n_heads={n_heads}, n_layers={n_layers}')
 
     # encoder
