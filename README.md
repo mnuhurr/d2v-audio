@@ -20,8 +20,8 @@ hop_length: 512
 min_duration: 9.0
 max_duration: 9.0
 
-epochs: 100
-batch_size: 256
+epochs: 200
+batch_size: 64
 num_dataloader_workers: 8
 
 d_model: 512
@@ -33,13 +33,15 @@ max_sequence_length: 512
 p_masking: 0.15
 masking_length: 6
 
-learning_rate_factor: 0.1
-warmup_steps: 6000
+n_teacher_layers: 8
+learning_rate_factor: 0.01
+warmup_steps: 2000
 ema_decay: 0.9999
 lambda_var: 0
 
 model_path: data/model.pt
 
 log_interval: 100
+train_log_filename: train.log
 ```
 

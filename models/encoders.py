@@ -80,7 +80,7 @@ def foo():
     #x = torch.randn(2, 10*16000)
     #wenc = WaveEncoder(256)
 
-    x = torch.randn(2, 64, 251)
+    x = torch.randn(2, 64, 281)
     menc = MelEncoder(64, 256)
 
     y = menc(x)

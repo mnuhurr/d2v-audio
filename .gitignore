@@ -7,3 +7,4 @@ data
 *.yaml
 *.pkl
 *.log
+*.swp

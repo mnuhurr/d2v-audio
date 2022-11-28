@@ -301,7 +301,8 @@ def main(config_fn='settings.yaml'):
     lambda_var = cfg.get('lambda_var', 1.0)
     warmup = cfg.get('warmup_steps', 4000)
     
-    logger.info(f'learning_rate_factor={learning_rate}, ema_decay={ema_decay}, warmup_steps={warmup}, lambda_var={lambda_var}, n_teacher_layers={n_teacher_layers}')
+    logger.info(f'learning_rate_factor={learning_rate}, ema_decay={ema_decay}, warmup_steps={warmup}, lambda_var={lambda_var}')
+    logger.info(f'training targets are averages of the last {n_teacher_layers} teacher model output layers')
     logger.info(f'd_model={d_model}, d_ff={d_ff}, n_heads={n_heads}, n_layers={n_layers}')
 
     # encoder
