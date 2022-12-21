@@ -147,6 +147,7 @@ def normalize_block(x: torch.Tensor) -> torch.Tensor:
 
 def train(model: torch.nn.Module,
           target: torch.nn.Module,
+          scaler: torch.cuda.amp.GradScaler,
           loader: torch.utils.data.DataLoader,
           optimizer: torch.optim.Optimizer,
           scheduler: Optional[Any] = None,
@@ -179,24 +180,29 @@ def train(model: torch.nn.Module,
         x = x.to(device)
         input_mask = input_mask.to(device)
 
-        y_student, mask, padding_mask = model(x, input_mask=input_mask, mode='student')
-        with torch.no_grad():
-            y_teacher, _ = target(x, input_mask=input_mask, mode='teacher')
+        with torch.cuda.amp.autocast():
+            y_student, mask, padding_mask = model(x, input_mask=input_mask, mode='student')
+            with torch.no_grad():
+                y_teacher, _ = target(x, input_mask=input_mask, mode='teacher')
 
-        # normalize teacher
-        y_teacher = [normalize_block(block) for block in y_teacher]
+            # normalize teacher
+            y_teacher = [normalize_block(block) for block in y_teacher]
 
-        loss = loss_fn(y_student, y_teacher, mask, padding_mask=padding_mask, n_teacher_layers=n_teacher_layers, lambda_var=lambda_var)
+            loss = loss_fn(y_student, y_teacher, mask, padding_mask=padding_mask, n_teacher_layers=n_teacher_layers, lambda_var=lambda_var)
         if loss is None:
             continue
 
         train_loss += loss.item()
 
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        #loss.backward()
+        #optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+
         if scheduler is not None:
             scheduler.step()
+        scaler.update()
 
         # ema update
         ema_update(model, target, ema_decay)
@@ -351,6 +357,8 @@ def main(config_fn='settings.yaml'):
         masking_length=masking_length)
     target = deepcopy(model)
 
+    scaler = torch.cuda.amp.GradScaler()
+
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: step_lr(step, d_model, warmup_steps=warmup))
     logger.info(f'model size {model_size(model)/1e6:.1f}M')
@@ -365,7 +373,7 @@ def main(config_fn='settings.yaml'):
     for epoch in range(epochs):
         t0 = time.time()
 
-        train_loss = train(model, target, train_loader, optimizer, scheduler, log_interval=log_interval, ema_decay=ema_decay, lambda_var=lambda_var)
+        train_loss = train(model, target, scaler, train_loader, optimizer, scheduler, log_interval=log_interval, ema_decay=ema_decay, lambda_var=lambda_var)
         dt = time.time() - t0
         logger.info(f'epoch {epoch + 1} training done in {dt:.1f} seconds, training loss {train_loss:.4f}')
 
