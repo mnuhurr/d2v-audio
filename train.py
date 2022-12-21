@@ -345,20 +345,21 @@ def main(config_fn='settings.yaml'):
     logger.info(f'training targets are averages of the last {n_teacher_layers} teacher model output layers')
     logger.info(f'd_model={d_model}, d_ff={d_ff}, n_heads={n_heads}, n_layers={n_layers}')
 
-    # encoder
+    # student encoder
     model = D2VEncoder(
         d_model=d_model,
         n_layers=n_layers,
         d_ff=d_ff,
         n_heads=n_heads,
-        n_mels=n_mels,
+        # n_mels=n_mels,
         max_sequence_length=max_sequence_length,
         p_masking=p_masking,
         masking_length=masking_length)
+
+    # teacher
     target = deepcopy(model)
 
     scaler = torch.cuda.amp.GradScaler()
-
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: step_lr(step, d_model, warmup_steps=warmup))
     logger.info(f'model size {model_size(model)/1e6:.1f}M')

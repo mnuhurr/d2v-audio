@@ -3,44 +3,6 @@ import torch.nn.functional as F
 
 from typing import List, Tuple
 
-class CausalConv1d(torch.nn.Conv1d):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.causal_padding = self.dilation[0] * (self.kernel_size[0] - 1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self._conv_forward(F.pad(x, [self.causal_padding, 0]), self.weight, self.bias)
-
-
-class ResidualUnit(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, dilation: int = 1, kernel_size: int = 7):
-        super().__init__()
-
-        self.dilation = dilation
-
-        self.layers = torch.nn.Sequential(
-            CausalConv1d(in_channels=in_channels, out_channels=out_channels,
-                kernel_size=kernel_size, dilation=dilation),
-            torch.nn.ELU(),
-            torch.nn.Conv1d(in_channels=out_channels, out_channels=in_channels, kernel_size=1)
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.layers(x)
-
-
-class NormalizedCausalConvBlock(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 1, stride: int = 1):
-        super().__init__()
-
-        self.conv = CausalConv1d(in_channels, out_channels, kernel_size=kernel_size, stride=stride)
-        self.ln = torch.nn.LayerNorm(out_channels)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = F.gelu(self.conv(x))
-        x = self.ln(x.permute(0, 2, 1))
-        return x.permute(0, 2, 1)
-
 
 # base class
 class ConvEncoder(torch.nn.Module):

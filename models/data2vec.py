@@ -15,7 +15,7 @@ class D2VEncoder(torch.nn.Module):
                  n_layers: int,
                  d_ff: int,
                  n_heads: int,
-                 n_mels: int,
+                 # n_mels: int,
                  max_sequence_length: int,
                  p_masking: float = 0.065,
                  masking_length: int = 10):
