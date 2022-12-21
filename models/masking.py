@@ -1,6 +1,6 @@
 import torch
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 
 def mask_tokens(x: torch.Tensor,
@@ -43,7 +43,11 @@ def mask_tokens(x: torch.Tensor,
     return x, mask
 
 
-def simulate_masking(p, mask_len, n_rounds=1000, batch_size=512, num_timesteps=16) -> float:
+def simulate_masking(p: float, 
+                     mask_len: int, 
+                     n_rounds: int = 1000, 
+                     batch_size: int = 32, 
+                     num_timesteps: int = 64) -> float:
     """
     generate random masks to estimate the amount of masked tokens
 
@@ -64,3 +68,23 @@ def simulate_masking(p, mask_len, n_rounds=1000, batch_size=512, num_timesteps=1
         total_masked += torch.sum(mask < 0)
 
     return total_masked / (n_rounds * batch_size * num_timesteps)
+
+
+def contract_mask(mask: torch.Tensor, kernel_sizes: List[int], strides: List[int], paddings: List[int]) -> torch.Tensor:
+    """
+    shrink mask according to the given list of convolution network parameters. assume masked out positions are 
+    marked with -inf, and positions containing actual information are marked with 0.
+
+    :param mask: original mask
+    :param kernel_sizes: list of kernel sizes in the token encoder
+    :param strides: list of strides in the token encoder
+    :param paddings: list of paddings in the token encoder
+    :return: shrinked mask
+    """
+
+    for kernel_size, stride, padding  in zip(kernel_sizes, strides, paddings):
+        mask = torch.nn.functional.max_pool1d(mask, kernel_size=kernel_size, stride=stride, padding=padding)
+
+    return mask
+
+

@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from .encoders import WaveEncoder
 from .encoders import MelEncoder
 from .transformer import TransformerEncoder, EncoderLayer
+from .masking import contract_mask
 
 from typing import Tuple, Optional, Any, Union
 
@@ -21,8 +22,8 @@ class D2VEncoder(torch.nn.Module):
 
         super().__init__()
 
-        #self.encoder = WaveEncoder(d_model)
-        self.encoder = MelEncoder(n_mels, d_model)
+        self.encoder = WaveEncoder(d_model)
+        #self.encoder = MelEncoder(n_mels, d_model)
         self.transformer = TransformerEncoder(
             d_model=d_model,
             n_layers=n_layers,
@@ -37,21 +38,22 @@ class D2VEncoder(torch.nn.Module):
         self.register_buffer('p_masking', torch.tensor(p_masking), persistent=False)
         self.register_buffer('masking_length', torch.tensor(masking_length), persistent=False)
 
-    def forward(self, x: torch.Tensor, mode: str = 'encoder') -> Union[torch.Tensor, Tuple[torch.Tensor, Any]]:
+    def forward(self, x: torch.Tensor, input_mask: Optional[torch.Tensor] = None, mode: str = 'encoder') -> Union[torch.Tensor, Tuple[torch.Tensor, Any]]:
         assert mode in ['encoder', 'student', 'teacher']
 
         # extract tokens
         x = self.encoder(x)
         x = x.permute(0, 2, 1)
 
-        # todo: input padding/masking
+        if input_mask is not None:
+            input_mask = contract_mask(input_mask, *self.encoder.get_conv_params())
 
-        mask = None
+        training_mask = None
         if mode == 'student':
-            x, mask = self.mask_tokens(x)
+            x, training_mask = self.mask_tokens(x)
 
         # get transformer outputs
-        x, attn_weights = self.transformer(x)
+        x, attn_weights = self.transformer(x, mask=input_mask)
 
         # if we are in the student mode also compute the projection and add it to the same output list
         if mode == 'student':
@@ -60,16 +62,14 @@ class D2VEncoder(torch.nn.Module):
 
         # return attention weights for other modes?
         if mode == 'encoder':
-            return x, attn_weights
+            return x, attn_weights, input_mask
         elif mode == 'student':
-            return x, mask
+            return x, training_mask, input_mask
         elif mode == 'teacher':
-            return x
+            return x, input_mask
 
 
-    def mask_tokens(self,
-                    x: torch.Tensor,
-                    mask_token: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def mask_tokens(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         mask input tokens and generate corresponding mask. assume
             x.shape = [batch, t, d_model]
@@ -78,7 +78,6 @@ class D2VEncoder(torch.nn.Module):
         output mask has shape [batch, t] and contains zero for unmasked positions and -inf for masked positions
 
         :param x: input data
-        :param mask_token: optional mask token to be inserted in x for masked positions
         :return: masked x, mask
         """
 

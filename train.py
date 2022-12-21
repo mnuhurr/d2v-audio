@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import audiofile as af
 
 from common import init_log, read_yaml
-from dataset import MelDataset
+from dataset import RawAudioDataset, MelDataset, collate_fn
 from models import D2VEncoder
 from models.utils import model_size, ema_update
 from models.masking import simulate_masking
@@ -78,16 +78,28 @@ def mask_loss(y_pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) ->
     return torch.sum(loss * mask) / torch.sum(mask).to(loss.dtype)
 
 
-def loss_fn(y_student: List[torch.Tensor], y_teacher: List[torch.Tensor], mask: torch.Tensor, n_teacher_layers: int = 8, lambda_var: float = 1.0):
+def loss_fn(y_student: List[torch.Tensor], y_teacher: List[torch.Tensor], mask: torch.Tensor, padding_mask: Optional[torch.Tensor] = None, n_teacher_layers: int = 8, lambda_var: float = 1.0):
     """
     general loss function used for train/validation
     :param y_student: outputs from the student network
     :param y_teacher: outputs from the teacher network
     :param mask: mask (from the student network)
+    :param mask: token padding mask (possibly contracted in the network)
     :param n_teacher_layers: number of layers to average from the teacher output
     :param lambda_var:
     :return:
     """
+
+    # we want to take those positions that are masked out for student (mask < 0) and those that are included in the
+    # input (padding_mask == 0). flip the padding mask and combine with the training mask.
+    if padding_mask is not None:
+        # combine mask: start from training mask, and remove those positions that are not included in the original input
+        mask[padding_mask < 0] = 0
+        
+    if torch.sum(mask < 0) == 0:
+        # nothing to take the loss from
+        return None
+
     avg_teacher = torch.mean(torch.stack(y_teacher[-n_teacher_layers:]), dim=0)
 
     var_loss = F.relu(1 - avg_var(y_teacher[-1]))
@@ -163,17 +175,21 @@ def train(model: torch.nn.Module,
 
     batch_t0 = time.time()
 
-    for batch, x in enumerate(loader):
+    for batch, (x, input_mask) in enumerate(loader):
         x = x.to(device)
+        input_mask = input_mask.to(device)
 
-        y_student, mask = model(x, mode='student')
+        y_student, mask, padding_mask = model(x, input_mask=input_mask, mode='student')
         with torch.no_grad():
-            y_teacher = target(x, mode='teacher')
+            y_teacher, _ = target(x, input_mask=input_mask, mode='teacher')
 
         # normalize teacher
         y_teacher = [normalize_block(block) for block in y_teacher]
 
-        loss = loss_fn(y_student, y_teacher, mask, n_teacher_layers=n_teacher_layers, lambda_var=lambda_var)
+        loss = loss_fn(y_student, y_teacher, mask, padding_mask=padding_mask, n_teacher_layers=n_teacher_layers, lambda_var=lambda_var)
+        if loss is None:
+            continue
+
         train_loss += loss.item()
 
         optimizer.zero_grad()
@@ -216,16 +232,19 @@ def validate(model: torch.nn.Module,
     val_loss = 0.0
     val_vars = 0.0
 
-    for x in loader:
+    for x, input_mask in loader:
         x = x.to(device)
+        input_mask = input_mask.to(device)
 
-        y_student, mask = model(x, mode='student')
-        y_teacher = target(x, mode='teacher')
+        y_student, mask, padding_mask = model(x, input_mask=input_mask, mode='student')
+        y_teacher, _ = target(x, input_mask=input_mask, mode='teacher')
 
         # normalize teacher
         y_teacher = [normalize_block(block) for block in y_teacher]
 
-        loss = loss_fn(y_student, y_teacher, mask, n_teacher_layers=n_teacher_layers, lambda_var=lambda_var)
+        loss = loss_fn(y_student, y_teacher, mask, padding_mask=padding_mask, n_teacher_layers=n_teacher_layers, lambda_var=lambda_var)
+        if loss is None:
+            continue
 
         val_loss += loss.item()
         val_vars += avg_var(y_teacher[-1])
@@ -267,8 +286,9 @@ def main(config_fn='settings.yaml'):
     n_fft = cfg.get('n_fft', 1024)
     hop_length = cfg.get('hop_length')
     n_mels = cfg.get('n_mels', 64)
-    max_length = 280
+    max_length = None
 
+    """
     ds_train = MelDataset(
         filenames=train_files, 
         sample_rate=sample_rate, 
@@ -284,9 +304,14 @@ def main(config_fn='settings.yaml'):
         n_mels=n_mels,
         n_fft=n_fft,
         hop_length=hop_length)
+    """
+    ds_train = RawAudioDataset(filenames=train_files, sample_rate=sample_rate)
 
-    train_loader = torch.utils.data.DataLoader(ds_train, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    val_loader = torch.utils.data.DataLoader(ds_val, batch_size=batch_size, num_workers=num_workers)
+    ds_val = RawAudioDataset(filenames=val_files, sample_rate=sample_rate)
+
+
+    train_loader = torch.utils.data.DataLoader(ds_train, batch_size=batch_size, shuffle=True, num_workers=num_workers, collate_fn=collate_fn)
+    val_loader = torch.utils.data.DataLoader(ds_val, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
     
     # start building models
     d_model = cfg.get('d_model')
@@ -299,7 +324,7 @@ def main(config_fn='settings.yaml'):
 
     p_masking = cfg.get('p_masking', 0.065)
     masking_length = cfg.get('masking_length', 10)
-    p_token_mask = simulate_masking(p_masking, masking_length, num_timesteps=120)
+    p_token_mask = simulate_masking(p_masking, masking_length, num_timesteps=80)
     logger.info(f'p_masking={p_masking}, masking_length={masking_length}, fraction of masked tokens approx {p_token_mask:.3f}')
 
     # number of layers from the teacher network to average over
