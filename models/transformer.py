@@ -52,7 +52,7 @@ class EncoderLayer(torch.nn.Module):
 
 
 class DecoderLayer(torch.nn.Module):
-    def __init__(self, d_model: int, d_ff: int, n_heads: int):
+    def __init__(self, d_model: int, d_ff: int, n_heads: int, mask: Optional[torch.Tensor] = None):
         super().__init__()
 
         self.attn = torch.nn.MultiheadAttention(d_model, n_heads, batch_first=True)
@@ -67,6 +67,8 @@ class DecoderLayer(torch.nn.Module):
             torch.nn.Linear(d_ff, d_model)
         )
         self.ff_ln = torch.nn.LayerNorm(d_model)
+
+        self.register_buffer('mask', mask)
 
     def forward(self,
                 x: torch.Tensor,
@@ -103,10 +105,37 @@ class TransformerEncoder(torch.nn.Module):
         # return list of
         layer_outputs = []
         attn_weights = []
-        for k, layer in enumerate(self.layers):
+        for layer in self.layers:
             x, w = layer(x, mask=mask)
             layer_outputs.append(x)
             attn_weights.append(w)
 
         return layer_outputs, attn_weights
+
+
+class TransformerDecoder(torch.nn.Module):
+    def __init__(self, d_model: int, n_layers: int, d_ff: int, n_heads: int, max_sequence_length: int, causal: bool = True):
+        super().__init__()
+
+        self.positional_encoding = PositionalEncoding(d_model, max_sequence_length)
+        self.layers = torch.nn.ModuleList([DecoderLayer(d_model, d_ff, n_heads) for _ in range(n_layers)])
+
+    def forward(self, 
+                x: torch.Tensor, 
+                xa: torch.Tensor,
+                mask: Optional[torch.Tensor] = None, 
+                xa_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
+    
+        # x = decoder output, xa = encoder output
+        x = self.positional_encoding(x)
+        
+        # do not collect layers into a list
+        attn_weights = []
+        x_attn_weights = []
+        for layer in self.layers:
+            x, w, xw = layer(x, xa, mask=mask, xa_mask=xa_mask)
+            attn_weights.append(w)
+            x_attn_weights.append(xw)
+
+        return x, attn_weights, x_attn_weights
 

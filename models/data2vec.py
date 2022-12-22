@@ -15,15 +15,18 @@ class D2VEncoder(torch.nn.Module):
                  n_layers: int,
                  d_ff: int,
                  n_heads: int,
-                 # n_mels: int,
                  max_sequence_length: int,
+                 n_mels: Optional[int] = None,
                  p_masking: float = 0.065,
                  masking_length: int = 10):
 
         super().__init__()
 
-        self.encoder = WaveEncoder(d_model)
-        #self.encoder = MelEncoder(n_mels, d_model)
+        if n_mels is None or n_mels == 0:
+            self.encoder = WaveEncoder(d_model)
+        else:
+            self.encoder = MelEncoder(n_mels, d_model)
+
         self.transformer = TransformerEncoder(
             d_model=d_model,
             n_layers=n_layers,
@@ -38,7 +41,7 @@ class D2VEncoder(torch.nn.Module):
         self.register_buffer('p_masking', torch.tensor(p_masking), persistent=False)
         self.register_buffer('masking_length', torch.tensor(masking_length), persistent=False)
 
-    def forward(self, x: torch.Tensor, input_mask: Optional[torch.Tensor] = None, mode: str = 'encoder') -> Union[torch.Tensor, Tuple[torch.Tensor, Any]]:
+    def forward(self, x: torch.Tensor, input_mask: Optional[torch.Tensor] = None, mode: str = 'encoder') -> Union[torch.Tensor, Tuple[torch.Tensor, Any], Tuple[torch.Tensor, Any, Any]]:
         assert mode in ['encoder', 'student', 'teacher']
 
         # extract tokens

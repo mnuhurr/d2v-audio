@@ -52,7 +52,7 @@ class WaveEncoder(ConvEncoder):
 
 class MelEncoder(ConvEncoder):
     def __init__(self, n_mels, d_model: int = 128):
-        super().__init__(n_mels, d_model, kernel_sizes=[3, 3, 3], strides=[1, 2, 2], paddings=[1, 1, 1])
+        super().__init__(n_mels, d_model, kernel_sizes=[7, 5, 3], strides=[2, 2, 2], paddings=[1, 1, 1])
 
     def forward(self, x):
         return self.layers(x)

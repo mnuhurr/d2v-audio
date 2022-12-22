@@ -294,11 +294,10 @@ def main(config_fn='settings.yaml'):
     n_mels = cfg.get('n_mels', 64)
     max_length = None
 
-    """
     ds_train = MelDataset(
         filenames=train_files, 
         sample_rate=sample_rate, 
-        max_length=max_length, 
+        #max_length=max_length, 
         n_mels=n_mels,
         n_fft=n_fft,
         hop_length=hop_length)
@@ -306,15 +305,14 @@ def main(config_fn='settings.yaml'):
     ds_val = MelDataset(
         filenames=val_files, 
         sample_rate=sample_rate, 
-        max_length=max_length, 
+        #max_length=max_length, 
         n_mels=n_mels,
         n_fft=n_fft,
         hop_length=hop_length)
     """
     ds_train = RawAudioDataset(filenames=train_files, sample_rate=sample_rate)
-
     ds_val = RawAudioDataset(filenames=val_files, sample_rate=sample_rate)
-
+    """
 
     train_loader = torch.utils.data.DataLoader(ds_train, batch_size=batch_size, shuffle=True, num_workers=num_workers, collate_fn=collate_fn)
     val_loader = torch.utils.data.DataLoader(ds_val, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
@@ -351,7 +349,7 @@ def main(config_fn='settings.yaml'):
         n_layers=n_layers,
         d_ff=d_ff,
         n_heads=n_heads,
-        # n_mels=n_mels,
+        n_mels=n_mels,
         max_sequence_length=max_sequence_length,
         p_masking=p_masking,
         masking_length=masking_length)

@@ -2,7 +2,7 @@ import torch
 import torchaudio
 
 from pathlib import Path
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Tuple
 
 
 class RawAudioDataset(torch.utils.data.Dataset):
@@ -97,21 +97,4 @@ def collate_fn(batch):
         x = x.permute(0, 2, 1)
 
     return x, mask
-    
-
-def test_datasets():
-    fns = sorted(Path('/home/work/mnu/data/clotho/audio/validation').glob('*.wav'))
-
-    #ds = RawAudioDataset(fns)
-    ds = MelDataset(fns)
-
-    loader = torch.utils.data.DataLoader(ds, batch_size=16, collate_fn=collate_fn, shuffle=True)
-
-    x, mask = next(iter(loader))
-    print(x.shape, mask.shape)
-    
-    print(torch.sum(mask == 0) / mask.numel())
-
-if __name__ == '__main__':
-    test_datasets()
 
