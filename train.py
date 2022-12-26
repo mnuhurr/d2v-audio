@@ -123,6 +123,18 @@ def step_lr(step: int, d_model: int, warmup_steps: int = 4000) -> float:
     return 1 / math.sqrt(d_model) * torch.minimum(arg1, arg2)
 
 
+def piecewise_linear_lr(step: int, peak_rate: float, rise_steps: int = 2000, hold_steps: int = 30000, release_steps: int = 30000):
+    if step <= rise_steps:
+        return step / rise_steps * peak_rate
+    
+    elif step <= rise_steps + hold_steps:
+        return peak_rate
+
+    else:
+        f = min((step - hold_steps - rise_steps) / release_steps, 1.0)
+        return (1 - f) * peak_rate
+        
+
 def avg_var(x: torch.Tensor) -> torch.Tensor:
     """
     compute average variance for the coordinate representations (i.e. dim=-2)
@@ -272,6 +284,7 @@ def main(config_fn='settings.yaml'):
 
     log_interval = cfg.get('log_interval', 100)
     max_patience = cfg.get('patience')
+    warmup_epochs = cfg.get('warmup_epochs')
 
     model_path = Path(cfg.get('model_path', 'model.pt'))
     model_path.parent.mkdir(exist_ok=True, parents=True)
@@ -334,7 +347,8 @@ def main(config_fn='settings.yaml'):
     # number of layers from the teacher network to average over
     n_teacher_layers = cfg.get('n_teacher_layers', 8)
 
-    learning_rate = cfg.get('learning_rate_factor', 1.0)
+    #learning_rate = cfg.get('learning_rate_factor', 1.0)
+    learning_rate = cfg.get('learning_rate', 1e-4)
     ema_decay = cfg.get('ema_decay', 0.999)
     lambda_var = cfg.get('lambda_var', 1.0)
     warmup = cfg.get('warmup_steps', 4000)
@@ -357,9 +371,18 @@ def main(config_fn='settings.yaml'):
     # teacher
     target = deepcopy(model)
 
+    num_steps = epochs * len(train_loader)
+    rise_steps = int(0.05 * num_steps)
+    hold_steps = int(0.85 * num_steps)
+    release_steps = int(0.1 * num_steps)
+    logger.info(f'piecewise linear learning rate warmup {rise_steps}, peak rate {hold_steps}, release {release_steps} steps')
+
     scaler = torch.cuda.amp.GradScaler()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: step_lr(step, d_model, warmup_steps=warmup))
+    optimizer = torch.optim.Adam(model.parameters(), lr=1.0)
+    #scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: step_lr(step, d_model, warmup_steps=warmup))
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, 
+            lambda step: piecewise_linear_lr(step, peak_rate=learning_rate, rise_steps=rise_steps, hold_steps=hold_steps, release_steps=release_steps))
+    # piecewise_linear_lr(step: int, peak_rate: float, rise_steps: int = 2000, hold_steps: int = 30000, release_steps: int = 30000):
     logger.info(f'model size {model_size(model)/1e6:.1f}M')
 
     model = model.to(device)
@@ -379,18 +402,21 @@ def main(config_fn='settings.yaml'):
         val_loss, val_var = validate(model, target, val_loader, lambda_var=lambda_var)
         logger.info(f'epoch {epoch + 1} validation loss {val_loss:.4f}, avg variance {val_var:.4f}')
 
-        if max_patience is not None:
-            if val_loss < best_loss:
+        if warmup_epochs is not None and epoch < warmup_epochs:
+            continue
+
+        if val_loss < best_loss:
+            torch.save(model.state_dict(), model_path)
+
+            if max_patience is not None:
                 patience = max_patience
                 best_loss = val_loss
-                # save
-                torch.save(model.state_dict(), model_path)
 
-            else:
-                patience -= 1
-                if patience <= 0:
-                    logger.info(f'results not improving, stopping')
-                    break
+        elif max_patience is not None:
+            patience -= 1
+            if patience <= 0:
+                logger.info(f'results not improving, stopping')
+                break
 
     if 'final_model_path' in cfg:
         torch.save(model.state_dict(), cfg['final_model_path'])
