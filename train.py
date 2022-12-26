@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 
 import audiofile as af
+import pandas as pd
 
 from common import init_log, read_yaml
 from dataset import RawAudioDataset, MelDataset, collate_fn
@@ -265,7 +266,7 @@ def validate(model: torch.nn.Module,
             continue
 
         val_loss += loss.item()
-        val_vars += avg_var(y_teacher[-1])
+        val_vars += avg_var(y_teacher[-1]).item()
 
     return val_loss / len(loader), val_vars / len(loader)
 
@@ -391,6 +392,12 @@ def main(config_fn='settings.yaml'):
     patience = max_patience
     best_loss = float('inf')
 
+    history = {
+        'train_loss': [],
+        'val_loss': [],
+        'val_avg_var': []
+    }
+
     logger.info(f'start training for {epochs} epochs')
     for epoch in range(epochs):
         t0 = time.time()
@@ -401,6 +408,10 @@ def main(config_fn='settings.yaml'):
 
         val_loss, val_var = validate(model, target, val_loader, lambda_var=lambda_var)
         logger.info(f'epoch {epoch + 1} validation loss {val_loss:.4f}, avg variance {val_var:.4f}')
+
+        history['train_loss'].append(train_loss)
+        history['val_loss'].append(val_loss)
+        history['val_avg_var'].append(val_var)
 
         if warmup_epochs is not None and epoch < warmup_epochs:
             continue
@@ -421,6 +432,10 @@ def main(config_fn='settings.yaml'):
     if 'final_model_path' in cfg:
         torch.save(model.state_dict(), cfg['final_model_path'])
 
+    csv_fn = cfg.get('train_hist_filename')
+    if csv_fn is not None:
+        df = pd.DataFrame(history)
+        df.to_csv('history.csv')
 
 
 if __name__ == '__main__':
