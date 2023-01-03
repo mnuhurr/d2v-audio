@@ -167,6 +167,7 @@ def train(model: torch.nn.Module,
           log_interval: Optional[int] = 100,
           n_teacher_layers: int = 8,
           ema_decay: float = 0.999,
+          ema_decay_step_delta: float = 0.0,
           lambda_var: float = 0.0) -> float:
     """
     training for one epoch.
@@ -179,6 +180,7 @@ def train(model: torch.nn.Module,
     :param log_interval: optional interval of batches for intermediate printouts
     :param n_teacher_layers: number of layers to include in the teacher network output average
     :param ema_decay: ema decay value
+    :param ema_decay_step_delta: ema decay value change after each step
     :param lambda_var: multiplier for variance loss
     :return: training loss
     """
@@ -219,6 +221,7 @@ def train(model: torch.nn.Module,
 
         # ema update
         ema_update(model, target, ema_decay)
+        ema_decay += ema_decay_step_delta
 
         if log_interval is not None and batch % log_interval == 0:
             t_batch = (time.time() - batch_t0) * 1000 / log_interval
@@ -308,25 +311,25 @@ def main(config_fn='settings.yaml'):
     n_mels = cfg.get('n_mels', 64)
     max_length = None
 
-    ds_train = MelDataset(
-        filenames=train_files, 
-        sample_rate=sample_rate, 
-        #max_length=max_length, 
-        n_mels=n_mels,
-        n_fft=n_fft,
-        hop_length=hop_length)
+    if n_mels > 0:
+        ds_train = MelDataset(
+            filenames=train_files, 
+            sample_rate=sample_rate, 
+            #max_length=max_length, 
+            n_mels=n_mels,
+            n_fft=n_fft,
+            hop_length=hop_length)
 
-    ds_val = MelDataset(
-        filenames=val_files, 
-        sample_rate=sample_rate, 
-        #max_length=max_length, 
-        n_mels=n_mels,
-        n_fft=n_fft,
-        hop_length=hop_length)
-    """
-    ds_train = RawAudioDataset(filenames=train_files, sample_rate=sample_rate)
-    ds_val = RawAudioDataset(filenames=val_files, sample_rate=sample_rate)
-    """
+        ds_val = MelDataset(
+            filenames=val_files, 
+            sample_rate=sample_rate, 
+            #max_length=max_length, 
+            n_mels=n_mels,
+            n_fft=n_fft,
+            hop_length=hop_length)
+    else:
+        ds_train = RawAudioDataset(filenames=train_files, sample_rate=sample_rate)
+        ds_val = RawAudioDataset(filenames=val_files, sample_rate=sample_rate)
 
     train_loader = torch.utils.data.DataLoader(ds_train, batch_size=batch_size, shuffle=True, num_workers=num_workers, collate_fn=collate_fn)
     val_loader = torch.utils.data.DataLoader(ds_val, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
@@ -398,11 +401,22 @@ def main(config_fn='settings.yaml'):
         'val_avg_var': []
     }
 
+    ema_decay_start = cfg.get('ema_decay_start', ema_decay)
+    tau_change_epochs = cfg.get('ema_decay_change_epochs', 2)
+    logger.info(f'tau_0={ema_decay_start}, tau_e={ema_decay}, tau change epochs {tau_change_epochs}')
+
     logger.info(f'start training for {epochs} epochs')
     for epoch in range(epochs):
         t0 = time.time()
 
-        train_loss = train(model, target, scaler, train_loader, optimizer, scheduler, log_interval=log_interval, ema_decay=ema_decay, lambda_var=lambda_var)
+        if epoch < tau_change_epochs:
+            delta_tau = (ema_decay - ema_decay_start) / (len(train_loader) * tau_change_epochs)
+            epoch_tau0 = ema_decay_start + epoch * len(train_loader) * delta_tau
+        else:
+            epoch_tau0 = ema_decay
+            delta_tau = 0.0
+
+        train_loss = train(model, target, scaler, train_loader, optimizer, scheduler, log_interval=log_interval, ema_decay=epoch_tau0, ema_decay_step_delta=delta_tau, lambda_var=lambda_var)
         dt = time.time() - t0
         logger.info(f'epoch {epoch + 1} training done in {dt:.1f} seconds, training loss {train_loss:.4f}')
 
