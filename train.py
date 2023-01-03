@@ -405,6 +405,7 @@ def main(config_fn='settings.yaml'):
     tau_change_epochs = cfg.get('ema_decay_change_epochs', 2)
     logger.info(f'tau_0={ema_decay_start}, tau_e={ema_decay}, tau change epochs {tau_change_epochs}')
 
+    history_csv_fn = cfg.get('train_hist_filename')
     logger.info(f'start training for {epochs} epochs')
     for epoch in range(epochs):
         t0 = time.time()
@@ -427,6 +428,10 @@ def main(config_fn='settings.yaml'):
         history['val_loss'].append(val_loss)
         history['val_avg_var'].append(val_var)
 
+        if history_csv_fn is not None:
+            df = pd.DataFrame(history)
+            df.to_csv(history_csv_fn)
+
         if warmup_epochs is not None and epoch < warmup_epochs:
             continue
 
@@ -445,11 +450,6 @@ def main(config_fn='settings.yaml'):
 
     if 'final_model_path' in cfg:
         torch.save(model.state_dict(), cfg['final_model_path'])
-
-    csv_fn = cfg.get('train_hist_filename')
-    if csv_fn is not None:
-        df = pd.DataFrame(history)
-        df.to_csv('history.csv')
 
 
 if __name__ == '__main__':
