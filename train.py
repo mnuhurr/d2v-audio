@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 import audiofile as af
 import pandas as pd
+from sklearn.model_selection import train_test_split
 
 from common import init_log, read_yaml
 from dataset import RawAudioDataset, MelDataset, collate_fn
@@ -20,7 +21,6 @@ from models.masking import simulate_masking
 from typing import List, Union, Optional, Any, Tuple
 
 
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 
 def get_dir_filenames(dir_path: Union[str, Path], ext: str = '.wav', min_duration: Optional[float] = None) -> List[Path]:
@@ -41,27 +41,6 @@ def get_dir_filenames(dir_path: Union[str, Path], ext: str = '.wav', min_duratio
     return filenames
 
 
-def smoothed_l1_loss(y_pred: torch.Tensor, y_true: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
-    """
-    smoothed loss from the paper. for values with absolute error at most beta returns l2 loss, otherwise l1.
-    this function does not do any reduction.
-    
-    :param y_pred:
-    :param y_true:
-    :param beta: threshold value for smoothing
-    :return: tensor of smoothed losses
-    """
-    # no reduction
-    e = torch.abs(y_pred - y_true)
-
-    ind = e <= beta
-
-    e[ind] = 0.5 * e[ind]**2 / beta
-    e[~ind] = e[~ind] - 0.5 * beta
-
-    return e
-
-
 def mask_loss(y_pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     """
     compute mse loss for the masked positions. masked positions are marked with negative values.
@@ -72,7 +51,7 @@ def mask_loss(y_pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) ->
     :return:
     """
     #loss = F.mse_loss(y_pred, y_true, reduction='none')
-    loss = smoothed_l1_loss(y_pred, y_true, beta=1.5)
+    loss = F.huber_loss(y_pred, y_true, delta=1.0, reduction='none')
     # count loss from the masked positions
     mask = (mask < 0).to(loss.dtype)
     mask = mask.unsqueeze(-1)
@@ -96,7 +75,7 @@ def loss_fn(y_student: List[torch.Tensor], y_teacher: List[torch.Tensor], mask: 
     if padding_mask is not None:
         # combine mask: start from training mask, and remove those positions that are not included in the original input
         mask[padding_mask < 0] = 0
-        
+
     if torch.sum(mask < 0) == 0:
         # nothing to take the loss from
         return None
@@ -124,17 +103,17 @@ def step_lr(step: int, d_model: int, warmup_steps: int = 4000) -> float:
     return 1 / math.sqrt(d_model) * torch.minimum(arg1, arg2)
 
 
-def piecewise_linear_lr(step: int, peak_rate: float, rise_steps: int = 2000, hold_steps: int = 30000, release_steps: int = 30000):
+def piecewise_linear_lr(step: int, rise_steps: int = 2000, hold_steps: int = 30000, release_steps: int = 30000):
     if step <= rise_steps:
-        return step / rise_steps * peak_rate
-    
+        return step / rise_steps
+
     elif step <= rise_steps + hold_steps:
-        return peak_rate
+        return 1.0
 
     else:
         f = min((step - hold_steps - rise_steps) / release_steps, 1.0)
-        return (1 - f) * peak_rate
-        
+        return (1 - f)
+
 
 def avg_var(x: torch.Tensor) -> torch.Tensor:
     """
@@ -160,7 +139,6 @@ def normalize_block(x: torch.Tensor) -> torch.Tensor:
 
 def train(model: torch.nn.Module,
           target: torch.nn.Module,
-          scaler: torch.cuda.amp.GradScaler,
           loader: torch.utils.data.DataLoader,
           optimizer: torch.optim.Optimizer,
           scheduler: Optional[Any] = None,
@@ -168,7 +146,8 @@ def train(model: torch.nn.Module,
           n_teacher_layers: int = 8,
           ema_decay: float = 0.999,
           ema_decay_step_delta: float = 0.0,
-          lambda_var: float = 0.0) -> float:
+          lambda_var: float = 0.0,
+          device: Optional[torch.device] = None) -> float:
     """
     training for one epoch.
 
@@ -191,6 +170,8 @@ def train(model: torch.nn.Module,
 
     batch_t0 = time.time()
 
+    scaler = torch.cuda.amp.GradScaler()
+
     for batch, (x, input_mask) in enumerate(loader):
         x = x.to(device)
         input_mask = input_mask.to(device)
@@ -204,14 +185,13 @@ def train(model: torch.nn.Module,
             y_teacher = [normalize_block(block) for block in y_teacher]
 
             loss = loss_fn(y_student, y_teacher, mask, padding_mask=padding_mask, n_teacher_layers=n_teacher_layers, lambda_var=lambda_var)
+
         if loss is None:
             continue
 
         train_loss += loss.item()
 
         optimizer.zero_grad()
-        #loss.backward()
-        #optimizer.step()
         scaler.scale(loss).backward()
         scaler.step(optimizer)
 
@@ -219,7 +199,7 @@ def train(model: torch.nn.Module,
             scheduler.step()
         scaler.update()
 
-        # ema update
+        # update both ema model & ema parameter
         ema_update(model, target, ema_decay)
         ema_decay += ema_decay_step_delta
 
@@ -237,7 +217,8 @@ def validate(model: torch.nn.Module,
              target: torch.nn.Module,
              loader: torch.utils.data.DataLoader,
              n_teacher_layers: int = 8,
-             lambda_var: float = 1.0) -> Tuple[float, float]:
+             lambda_var: float = 1.0,
+             device: Optional[torch.device] = None) -> Tuple[float, float]:
     """
     validation for one epoch.
 
@@ -278,8 +259,10 @@ def main(config_fn='settings.yaml'):
     cfg = read_yaml(config_fn)
     logger = init_log('trainer', filename=cfg.get('train_log_filename'), level=cfg.get('log_level', 'info'))
 
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
     min_duration = cfg.get('min_duration')
-    max_duration = cfg.get('max_duration', 10.0)
+    #max_duration = cfg.get('max_duration', 10.0)
     sample_rate = cfg.get('sample_rate', 16000)
 
     batch_size = cfg.get('batch_size', 16)
@@ -293,37 +276,35 @@ def main(config_fn='settings.yaml'):
     model_path = Path(cfg.get('model_path', 'model.pt'))
     model_path.parent.mkdir(exist_ok=True, parents=True)
 
-    train_files = []
-    val_files = []
+    filenames = []
 
     logger.info('reading files')
     for train_dir in cfg.get('train_data_dirs', []):
-        train_files.extend(get_dir_filenames(train_dir, min_duration=min_duration))
+        filenames.extend(get_dir_filenames(train_dir, min_duration=min_duration))
 
-    for val_dir in cfg.get('val_data_dirs', []):
-        val_files.extend(get_dir_filenames(val_dir, min_duration=min_duration))
+    validation_size = cfg.get('validation_size', 0.1)
+    train_files, val_files = train_test_split(filenames, test_size=validation_size, random_state=42)
 
-    logger.info(f'got {len(train_files)} for training, {len(val_files)} for validation')
+    logger.info(f'{len(train_files)} for training, {len(val_files)} for validation')
 
-    # with 16kHz sampling rate, n_fft=1024, hop_length=512 an eight-second clip will be 251 mel frames.
     n_fft = cfg.get('n_fft', 1024)
     hop_length = cfg.get('hop_length')
     n_mels = cfg.get('n_mels', 64)
-    max_length = None
+    # max_length = None
 
     if n_mels > 0:
         ds_train = MelDataset(
-            filenames=train_files, 
-            sample_rate=sample_rate, 
-            #max_length=max_length, 
+            filenames=train_files,
+            sample_rate=sample_rate,
+            # max_length=max_length,
             n_mels=n_mels,
             n_fft=n_fft,
             hop_length=hop_length)
 
         ds_val = MelDataset(
-            filenames=val_files, 
-            sample_rate=sample_rate, 
-            #max_length=max_length, 
+            filenames=val_files,
+            sample_rate=sample_rate,
+            # max_length=max_length,
             n_mels=n_mels,
             n_fft=n_fft,
             hop_length=hop_length)
@@ -331,9 +312,19 @@ def main(config_fn='settings.yaml'):
         ds_train = RawAudioDataset(filenames=train_files, sample_rate=sample_rate)
         ds_val = RawAudioDataset(filenames=val_files, sample_rate=sample_rate)
 
-    train_loader = torch.utils.data.DataLoader(ds_train, batch_size=batch_size, shuffle=True, num_workers=num_workers, collate_fn=collate_fn)
-    val_loader = torch.utils.data.DataLoader(ds_val, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
-    
+    train_loader = torch.utils.data.DataLoader(
+        dataset=ds_train,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        collate_fn=collate_fn)
+
+    val_loader = torch.utils.data.DataLoader(
+        dataset=ds_val,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        collate_fn=collate_fn)
+
     # start building models
     d_model = cfg.get('d_model')
     d_ff = cfg.get('d_ff')
@@ -356,7 +347,7 @@ def main(config_fn='settings.yaml'):
     ema_decay = cfg.get('ema_decay', 0.999)
     lambda_var = cfg.get('lambda_var', 1.0)
     warmup = cfg.get('warmup_steps', 4000)
-    
+
     logger.info(f'learning_rate_factor={learning_rate}, ema_decay={ema_decay}, warmup_steps={warmup}, lambda_var={lambda_var}')
     logger.info(f'training targets are averages of the last {n_teacher_layers} teacher model output layers')
     logger.info(f'd_model={d_model}, d_ff={d_ff}, n_heads={n_heads}, n_layers={n_layers}')
@@ -381,12 +372,16 @@ def main(config_fn='settings.yaml'):
     release_steps = int(0.1 * num_steps)
     logger.info(f'piecewise linear learning rate warmup {rise_steps}, peak rate {hold_steps}, release {release_steps} steps')
 
-    scaler = torch.cuda.amp.GradScaler()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1.0)
+    #optimizer = torch.optim.AdamW(model.parameters(), lr=1.0)
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5)
     #scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: step_lr(step, d_model, warmup_steps=warmup))
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, 
-            lambda step: piecewise_linear_lr(step, peak_rate=learning_rate, rise_steps=rise_steps, hold_steps=hold_steps, release_steps=release_steps))
-    # piecewise_linear_lr(step: int, peak_rate: float, rise_steps: int = 2000, hold_steps: int = 30000, release_steps: int = 30000):
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lambda step: piecewise_linear_lr(step,
+                                         rise_steps=rise_steps,
+                                         hold_steps=hold_steps,
+                                         release_steps=release_steps))
+
     logger.info(f'model size {model_size(model)/1e6:.1f}M')
 
     model = model.to(device)
@@ -417,11 +412,22 @@ def main(config_fn='settings.yaml'):
             epoch_tau0 = ema_decay
             delta_tau = 0.0
 
-        train_loss = train(model, target, scaler, train_loader, optimizer, scheduler, log_interval=log_interval, ema_decay=epoch_tau0, ema_decay_step_delta=delta_tau, lambda_var=lambda_var)
+        train_loss = train(
+            model=model,
+            target=target,
+            loader=train_loader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            log_interval=log_interval,
+            ema_decay=epoch_tau0,
+            ema_decay_step_delta=delta_tau,
+            lambda_var=lambda_var,
+            device=device)
+
         dt = time.time() - t0
         logger.info(f'epoch {epoch + 1} training done in {dt:.1f} seconds, training loss {train_loss:.4f}')
 
-        val_loss, val_var = validate(model, target, val_loader, lambda_var=lambda_var)
+        val_loss, val_var = validate(model, target, val_loader, lambda_var=lambda_var, device=device)
         logger.info(f'epoch {epoch + 1} validation loss {val_loss:.4f}, avg variance {val_var:.4f}')
 
         history['train_loss'].append(train_loss)
@@ -445,7 +451,7 @@ def main(config_fn='settings.yaml'):
         elif max_patience is not None:
             patience -= 1
             if patience <= 0:
-                logger.info(f'results not improving, stopping')
+                logger.info('results not improving, stopping')
                 break
 
     if 'final_model_path' in cfg:

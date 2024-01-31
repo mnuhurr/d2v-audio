@@ -1,10 +1,9 @@
 import torch
-import torch.nn.functional as F
 
 from .encoders import WaveEncoder
 from .encoders import MelEncoder
-from .transformer import TransformerEncoder, EncoderLayer
-from .masking import contract_mask
+from .encoders import ConvNeXtEncoder
+from .transformer import TransformerEncoder
 
 from typing import Tuple, Optional, Any, Union
 
@@ -13,19 +12,28 @@ class D2VEncoder(torch.nn.Module):
     def __init__(self,
                  d_model: int,
                  n_layers: int,
-                 d_ff: int,
                  n_heads: int,
-                 max_sequence_length: int,
+                 d_ff: Optional[int] = None,
+                 max_sequence_length: int = 1024,
                  n_mels: Optional[int] = None,
                  p_masking: float = 0.065,
-                 masking_length: int = 10):
+                 masking_length: int = 10,
+                 d_encoder: Optional[int] = None,
+                 codebook_size: int = 1024):
 
         super().__init__()
 
+        d_ff = d_ff if d_ff is not None else 4 * d_model
+        self.encoder = ConvNeXtEncoder(n_channels=32, d_model=d_model)
+
+        """
+        d_encoder = d_encoder if d_encoder is not None else d_model
+
         if n_mels is None or n_mels == 0:
-            self.encoder = WaveEncoder(d_model)
+            self.encoder = WaveEncoder(d_encoder)
         else:
-            self.encoder = MelEncoder(n_mels, d_model)
+            self.encoder = MelEncoder(n_mels, d_encoder)
+        """
 
         self.transformer = TransformerEncoder(
             d_model=d_model,
@@ -41,15 +49,19 @@ class D2VEncoder(torch.nn.Module):
         self.register_buffer('p_masking', torch.tensor(p_masking), persistent=False)
         self.register_buffer('masking_length', torch.tensor(masking_length), persistent=False)
 
-    def forward(self, x: torch.Tensor, input_mask: Optional[torch.Tensor] = None, mode: str = 'encoder') -> Union[torch.Tensor, Tuple[torch.Tensor, Any], Tuple[torch.Tensor, Any, Any]]:
+    def forward(self,
+                x: torch.Tensor,
+                input_mask: Optional[torch.Tensor] = None,
+                mode: str = 'encoder') -> Union[torch.Tensor, Tuple[torch.Tensor, Any], Tuple[torch.Tensor, Any, Any]]:
         assert mode in ['encoder', 'student', 'teacher']
 
         # extract tokens
         x = self.encoder(x)
-        x = x.permute(0, 2, 1)
+        #x = x.permute(0, 2, 1)
 
         if input_mask is not None:
-            input_mask = contract_mask(input_mask, *self.encoder.get_conv_params())
+            #input_mask = contract_mask(input_mask, *self.encoder.get_conv_params())
+            input_mask = torch.nn.functional.max_pool1d(input_mask, self.encoder.downsampling_factor())
 
         training_mask = None
         if mode == 'student':
@@ -70,7 +82,6 @@ class D2VEncoder(torch.nn.Module):
             return x, training_mask, input_mask
         elif mode == 'teacher':
             return x, input_mask
-
 
     def mask_tokens(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """

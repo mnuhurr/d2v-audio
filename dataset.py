@@ -52,7 +52,8 @@ class MelDataset(torch.utils.data.Dataset):
             sample_rate=sample_rate, 
             n_fft=n_fft, 
             hop_length=hop_length,
-            n_mels=n_mels)
+            n_mels=n_mels,
+            f_min=50.0)
 
         self.scaling = log_mel_scaling
 

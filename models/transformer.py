@@ -102,6 +102,9 @@ class TransformerEncoder(torch.nn.Module):
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
         x = self.positional_encoding(x)
 
+        if mask is not None and mask.is_floating_point():
+            mask = mask.to(torch.bool)
+
         # return list of
         layer_outputs = []
         attn_weights = []
